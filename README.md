@@ -47,10 +47,10 @@ python3 -m venv venv
 
 ```bash
 # Windows
-.\venv\Scripts\activate
+.\.venv\Scripts\activate
 
 # Linux/macOS
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 ### 4️- Install Required Libraries
