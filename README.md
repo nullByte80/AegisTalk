@@ -30,7 +30,7 @@ Follow these instructions to set up the project on your local machine.
 
 ```bash
 git clone https://github.com/m0stafaSec/AegisTalk.git
-cd AegisTalk-P2P
+cd AegisTalk
 ```
 
 ### 2️- Create a Virtual Environment (Recommended)
