@@ -29,7 +29,7 @@ Follow these instructions to set up the project on your local machine.
 ### 1️- Clone the Repository
 
 ```bash
-git clone https://github.com/m0stafaSec/AegisTalk.git
+git clone https://github.com/nullByte80/AegisTalk.git
 cd AegisTalk
 ```
 
