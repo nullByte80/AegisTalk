@@ -16,7 +16,7 @@ def receive_msg(client, alias):
         except:
             print("[-] Connection closed.")
             client.close()
-            break
+            os._exit(0)
 
 def start_guest(ip, alias):
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -33,5 +33,5 @@ def start_guest(ip, alias):
         if msg.lower() == '/exit':
             print("\033[93m[*] Closing session...\033[0m")
             client.close()
-            break
+            os._exit(0)
         client.send(f"{alias}<$>: {msg}".encode())
