@@ -83,14 +83,3 @@ This project adheres to **Scenario 2** of the Cryptography Project requirements:
 * Hybridization by using the output of one technique as input to another.
 
 ---
-
-##  Credits
-
-Developed by a team of six members:
-
-* Mostafa Shaaban 
-* Mostafa Shaaban
-* Abdullah El-Shehaly
-* Fares Ashraf
-* Youssef Ibrahim
-* Islam Ayman
