@@ -89,4 +89,4 @@ def performance_benchmark(keys, iterations=50000):
 if __name__ == "__main__":
     os.system('') 
     session_keys = simulate_handshake()
-    performance_benchmark(session_keys, iterations=20000)
+    performance_benchmark(session_keys, iterations=50000)
