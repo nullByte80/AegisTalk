@@ -7,10 +7,15 @@ import os
 from src.crypto.dh_exchange import ECDHExchange
 from src.crypto.key_derivation import derive_keys
 from src.crypto.aes_cipher import AESCipher
+from src.crypto.chacha_cipher import ChaChaCipher
+
+# المتغير السحري: غير القيمة دي لـ 'AES' أو 'CHACHA'
+# تأكد إنها نفس القيمة في ملف الـ guest
+CIPHER_MODE = 'CHACHA'  #CIPHER_MODE = 'AES'
 
 clients = []
 aliases = []
-ciphers = {}  # قاموس بنخزن فيه مفتاح التشفير الخاص بكل ضيف (عشان لو دخل أكتر من ضيف)
+ciphers = {}  # قاموس لتخزين كائن التشفير الخاص بكل ضيف
 room_active = False
 
 def get_local_ip():
@@ -25,39 +30,33 @@ def get_local_ip():
     return ip
 
 def broadcast(message_str, _client=None):
-    """تشفير وإرسال الرسالة لكل الضيوف"""
+    """تشفير وإرسال الرسالة لكل الضيوف بناءً على الـ Mode المختار"""
     for client in clients:
         if client != _client:
             try:
-                # بنجيب مفتاح الـ AES الخاص بالضيف ده تحديداً
-                aes = ciphers[client]
-                # التشفير: بيطلع Nonce (12 byte) والـ Ciphertext
-                nonce, ciphertext = aes.encrypt(message_str.encode('utf-8'))
-                # دمجهم وإرسالهم
+                # بنجيب كائن التشفير (سواء كان AES أو ChaCha)
+                cipher = ciphers[client]
+                nonce, ciphertext = cipher.encrypt(message_str.encode('utf-8'))
                 client.send(nonce + ciphertext)
             except:
                 client.close()
 
 def handle_client(client, owner_alias):
-    """استقبال الرسايل المشفرة من الضيف، فك تشفيرها، وعرضها"""
+    """فك تشفير الرسائل القادمة باستخدام الكائن المخزن للضيف"""
     while True:
         try:
             encrypted_data = client.recv(4096)
             if encrypted_data:
-                # استدعاء مفتاح الـ AES بتاع الضيف ده
-                aes = ciphers[client]
+                cipher = ciphers[client]
                 
-                # فصل الـ Nonce عن التشفير
+                # الـ Nonce طوله 12 بايت في AES-GCM و ChaCha20-Poly1305
                 nonce = encrypted_data[:12]
                 ciphertext = encrypted_data[12:]
                 
-                # فك التشفير
-                decrypted_msg = aes.decrypt(nonce, ciphertext).decode('utf-8')
+                decrypted_msg = cipher.decrypt(nonce, ciphertext).decode('utf-8')
                 
-                # تمرير الرسالة لباقي الضيوف (لو فيه)
                 broadcast(decrypted_msg, client)
                 
-                # طباعة الرسالة على شاشة الـ Owner
                 sys.stdout.write(f"\r{decrypted_msg}\n") 
                 sys.stdout.write(f"[{owner_alias}#>]: ")
                 sys.stdout.flush()
@@ -72,6 +71,7 @@ def start_owner(my_alias):
     server.listen()
     
     print(f"[*] IP: {get_local_ip()} | Port: 1337")
+    print(f"[*] Cipher Mode: {CIPHER_MODE}")
     print(f"[*] Room active. Waiting for guests...")
 
     def accept_guests():
@@ -79,48 +79,41 @@ def start_owner(my_alias):
         while True:
             client, addr = server.accept()
             
-            # 1. تبادل الأسماء (Plaintext مؤقتاً عشان نتعرف على بعض)
             client.send("GET_ALIAS".encode())
             alias = client.recv(4096).decode()
             
             print(f"\n[*] Executing Secure Handshake with {alias}...")
             
-            # ==========================================
-            # 🔒 2. المصافحة الآمنة (Secure Handshake) 🔒
-            # ==========================================
             dh = ECDHExchange()
-            
-            # نبعت المفتاح العام بتاعنا للضيف
             client.send(dh.get_public_key_bytes())
-            
-            # نستقبل المفتاح العام بتاع الضيف
             peer_pub_key = client.recv(4096)
             
-            # نحسب السر المشترك ونستخرج مفتاح AES
             shared_secret = dh.compute_shared_secret(peer_pub_key)
             session_keys = derive_keys(shared_secret)
             
-            # نخزن الـ AES Cipher للضيف ده في القاموس
-            ciphers[client] = AESCipher(session_keys.aes_key)
-            # ==========================================
+            # التبديل الذكي: ننشئ الكائن بناءً على الـ Mode
+            if CIPHER_MODE == 'AES':
+                ciphers[client] = AESCipher(session_keys.aes_key)
+            else:
+                ciphers[client] = ChaChaCipher(session_keys.chacha_key)
             
             clients.append(client)
             aliases.append(alias)
             
-            print(f"\033[92m[+] SECURE connection established with {alias}! Chat is LIVE.\033[0m")
+            print(f"\033[92m[+] SECURE ({CIPHER_MODE}) established with {alias}!\033[0m")
             room_active = True
             
             threading.Thread(target=handle_client, args=(client, my_alias), daemon=True).start()
 
     threading.Thread(target=accept_guests, daemon=True).start()
 
-    # Owner Chat Loop
     while True:
         try:
             msg = input(f"[{my_alias}#>]")
+            if not msg.strip(): continue
             if msg.lower() == '/exit': break
             if room_active:
                 formatted_msg = f"{my_alias}<#>: {msg}"
-                broadcast(formatted_msg) # الدالة دي هتشفر وتبعته
+                broadcast(formatted_msg)
         except KeyboardInterrupt:
             break

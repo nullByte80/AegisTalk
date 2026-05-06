@@ -34,7 +34,6 @@ def forward_and_log(src_socket, dst_socket, direction_label, color):
             break
 
 def start_sniffer(listen_port=8080, forward_port=1337):
-    # 1. إعداد السيرفر الوهمي (البروكسي) اللي هيستقبل اتصال الضيف
     proxy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     proxy.bind(('0.0.0.0', listen_port))
     proxy.listen(1)
