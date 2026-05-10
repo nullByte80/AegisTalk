@@ -1,7 +1,7 @@
 import socket
-import os
 import threading
 import sys
+import os
 import base64
 import time
 
@@ -14,17 +14,16 @@ from src.crypto.chacha_cipher import ChaChaCipher
 # Configuration
 CIPHER_MODE = 'CHACHA' 
 MAX_FILE_SIZE = 5 * 1024 * 1024 # 5MB Limit
-cipher_instance = None 
+PORT = 1337
+
+clients = []
+ciphers = {} 
+room_active = False
 
 def receive_full_packet(sock):
-    """
-    1. Modification: Read 4-byte size header first.
-    This ensures we pull the full 5MB file from the buffer.
-    """
     raw_size = sock.recv(4)
     if not raw_size: return None
     total_size = int.from_bytes(raw_size, byteorder='big')
-    
     data = b""
     while len(data) < total_size:
         packet = sock.recv(min(total_size - len(data), 4096))
@@ -32,75 +31,95 @@ def receive_full_packet(sock):
         data += packet
     return data
 
-def receive_msg(client, alias):
-    global cipher_instance
+def broadcast(message_bytes, _client=None, is_raw=False):
+    for client in clients:
+        if client != _client:
+            try:
+                if not is_raw:
+                    cipher = ciphers[client]
+                    nonce, ciphertext = cipher.encrypt(message_bytes)
+                    payload = nonce + ciphertext
+                else:
+                    payload = message_bytes
+                client.sendall(len(payload).to_bytes(4, 'big') + payload)
+            except:
+                client.close()
+                if client in clients: clients.remove(client)
+
+def handle_client(client, owner_alias):
     while True:
         try:
             data = receive_full_packet(client)
             if data:
+                cipher = ciphers[client]
                 nonce, ciphertext = data[:12], data[12:]
-                decrypted_payload = cipher_instance.decrypt(nonce, ciphertext).decode('utf-8')
+                decrypted_payload = cipher.decrypt(nonce, ciphertext).decode('utf-8')
                 
-                # 2. Modification: Detect and process incoming files
                 if decrypted_payload.startswith("<FILE>|"):
                     _, ext, b64_str = decrypted_payload.split("|")
                     file_data = base64.b64decode(b64_str)
-                    
                     save_path = f"received_{int(time.time())}{ext}"
                     with open(save_path, "wb") as f:
                         f.write(file_data)
-                        
                     print(f"\n[*] Media received and saved: {save_path}")
-                    print(f"[{alias}$>] ", end="", flush=True)
+                    broadcast(data, _client=client, is_raw=True)
                 else:
-                    sys.stdout.write(f"\r{decrypted_payload}\n[{alias}$>] ")
+                    broadcast(decrypted_payload.encode('utf-8'), client)
+                    sys.stdout.write(f"\r{decrypted_payload}\n[{owner_alias}#>]: ")
                     sys.stdout.flush()
         except:
-            client.close()
-            os._exit(0)
+            break
 
-def start_guest(ip, alias):
-    global cipher_instance
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.connect((ip, 1337))
 
-    if client.recv(4096).decode() == "GET_ALIAS":
-        client.send(alias.encode())
-
-    # --- Secure Handshake ---
-    dh = ECDHExchange()
-    peer_pub_key = client.recv(4096)
-    client.send(dh.get_public_key_bytes())
+def start_owner(my_alias):
+    global room_active
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(('0.0.0.0', PORT))
+    server.listen()
     
-    shared_secret = dh.compute_shared_secret(peer_pub_key)
-    keys = derive_keys(shared_secret)
-    cipher_instance = AESCipher(keys.aes_key) if CIPHER_MODE == 'AES' else ChaChaCipher(keys.chacha_key)
+    print(f"[*] Server LIVE on port {PORT} | Mode: {CIPHER_MODE}")
 
-    print(f"[*] Secure Handshake Complete. Mode: {CIPHER_MODE}")
-    threading.Thread(target=receive_msg, args=(client, alias), daemon=True).start()
+    def accept_guests():
+        global room_active
+        while True:
+            client, _ = server.accept()
+            client.send("GET_ALIAS".encode())
+            alias = client.recv(4096).decode()
+            
+            dh = ECDHExchange()
+            client.send(dh.get_public_key_bytes())
+            peer_pub_key = client.recv(4096)
+            
+            shared_secret = dh.compute_shared_secret(peer_pub_key)
+            keys = derive_keys(shared_secret)
+            ciphers[client] = AESCipher(keys.aes_key) if CIPHER_MODE == 'AES' else ChaChaCipher(keys.chacha_key)
+            
+            clients.append(client)
+            print(f"[+] Secure session established with {alias}")
+            room_active = True
+            threading.Thread(target=handle_client, args=(client, my_alias), daemon=True).start()
+
+    threading.Thread(target=accept_guests, daemon=True).start()
 
     while True:
-        msg = input(f"[{alias}$>] ")
-        if not msg.strip(): continue
-        if msg.lower() == '/exit': break
-        
-        payload = b""
-        # 3. Modification: Handling /send command for media
-        if msg.startswith("/send "):
-            path = msg.split(" ", 1)[1].strip().strip('"')
-            if os.path.exists(path) and os.path.getsize(path) <= MAX_FILE_SIZE:
-                with open(path, "rb") as f:
-                    b64_data = base64.b64encode(f.read()).decode('utf-8')
-                ext = os.path.splitext(path)[1]
-                payload = f"<FILE>|{ext}|{b64_data}".encode('utf-8')
-                print(f"[*] Encrypting and sending {path}...")
-            else:
-                print("[-] File error: Not found or exceeds 5MB limit.")
-                continue
-        else:
-            payload = f"{alias}<$>: {msg}".encode('utf-8')
+        try:
+            msg = input(f"[{my_alias}#>] ")
+            if not msg.strip(): continue
+            if msg.lower() == '/exit': break
             
-        # Encrypt and send with the 4-byte size header
-        nonce, ciphertext = cipher_instance.encrypt(payload)
-        full_payload = nonce + ciphertext
-        client.sendall(len(full_payload).to_bytes(4, 'big') + full_payload)
+            if msg.startswith("/send "):
+                path = msg.split(" ", 1)[1].strip().strip('"')
+                if os.path.exists(path) and os.path.getsize(path) <= MAX_FILE_SIZE:
+                    with open(path, "rb") as f:
+                        b64_data = base64.b64encode(f.read()).decode('utf-8')
+                    ext = os.path.splitext(path)[1]
+                    payload = f"<FILE>|{ext}|{b64_data}".encode('utf-8')
+                    broadcast(payload)
+                    print(f"[*] File {path} sent.")
+                else:
+                    print("[-] File error or size > 5MB.")
+            elif room_active:
+                broadcast(f"{my_alias}<#>: {msg}".encode('utf-8'))
+        except KeyboardInterrupt:
+            break
